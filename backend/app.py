@@ -435,5 +435,307 @@ def admin_get_applications():
     return jsonify(app_list), 200
 
 
+def company_required(f):
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if not current_user.is_authenticated:
+            return jsonify({"message": "Login required"}), 401
+        role = current_user.roles[0].name if current_user.roles else None
+        if role != "Company":
+            return jsonify({"message": "Company access required"}), 403
+        company = Company.query.filter_by(user_id=current_user.id).first()
+        if not company:
+            return jsonify({"message": "Company profile not found"}), 404
+        if not company.is_approved:
+            return jsonify({"message": "Company not approved yet"}), 403
+        if company.is_blacklisted:
+            return jsonify({"message": "Company is blacklisted"}), 403
+        return f(*args, **kwargs)
+    return decorated_function
+
+
+@app.route("/api/company/profile", methods=["GET"])
+@auth_required("token")
+@company_required
+def company_get_profile():
+    company = Company.query.filter_by(user_id=current_user.id).first()
+    return jsonify({
+        "id": company.id,
+        "company_name": company.company_name,
+        "industry": company.industry,
+        "location": company.location,
+        "website": company.website,
+        "description": company.description,
+        "company_logo": company.company_logo,
+        "is_approved": company.is_approved,
+        "email": current_user.email
+    }), 200
+
+
+@app.route("/api/company/profile", methods=["PUT"])
+@auth_required("token")
+@company_required
+def company_update_profile():
+    company = Company.query.filter_by(user_id=current_user.id).first()
+    data = request.get_json()
+
+    if data.get("company_name"):
+        company.company_name = data.get("company_name")
+    if data.get("industry") is not None:
+        company.industry = data.get("industry")
+    if data.get("location") is not None:
+        company.location = data.get("location")
+    if data.get("website") is not None:
+        company.website = data.get("website")
+    if data.get("description") is not None:
+        company.description = data.get("description")
+
+    db.session.commit()
+    return jsonify({"message": "Profile updated successfully"}), 200
+
+
+@app.route("/api/company/stats", methods=["GET"])
+@auth_required("token")
+@company_required
+def company_stats():
+    company = Company.query.filter_by(user_id=current_user.id).first()
+    total_jobs = JobPosition.query.filter_by(company_id=company.id).count()
+    active_jobs = JobPosition.query.filter_by(company_id=company.id, status="Active").count()
+
+    job_ids = [j.id for j in JobPosition.query.filter_by(company_id=company.id).all()]
+    total_applications = 0
+    shortlisted = 0
+    selected = 0
+    if job_ids:
+        total_applications = Application.query.filter(Application.job_id.in_(job_ids)).count()
+        shortlisted = Application.query.filter(Application.job_id.in_(job_ids), Application.status == "Shortlisted").count()
+        selected = Application.query.filter(Application.job_id.in_(job_ids), Application.status == "Selected").count()
+
+    return jsonify({
+        "total_jobs": total_jobs,
+        "active_jobs": active_jobs,
+        "total_applications": total_applications,
+        "shortlisted": shortlisted,
+        "selected": selected
+    }), 200
+
+
+@app.route("/api/company/jobs", methods=["GET"])
+@auth_required("token")
+@company_required
+def company_get_jobs():
+    company = Company.query.filter_by(user_id=current_user.id).first()
+    jobs = JobPosition.query.filter_by(company_id=company.id).all()
+    job_list = []
+    for j in jobs:
+        app_count = Application.query.filter_by(job_id=j.id).count()
+        job_list.append({
+            "id": j.id,
+            "title": j.title,
+            "description": j.description,
+            "location": j.location,
+            "salary": j.salary,
+            "skills_required": j.skills_required,
+            "experience_required": j.experience_required,
+            "benefits": j.benefits,
+            "status": j.status,
+            "is_approved": j.is_approved,
+            "last_date": j.last_date,
+            "application_count": app_count,
+            "created_at": str(j.created_at) if j.created_at else ""
+        })
+    return jsonify(job_list), 200
+
+
+@app.route("/api/company/jobs", methods=["POST"])
+@auth_required("token")
+@company_required
+def company_create_job():
+    company = Company.query.filter_by(user_id=current_user.id).first()
+    data = request.get_json()
+
+    title = data.get("title")
+    if not title:
+        return jsonify({"message": "Job title is required"}), 400
+
+    new_job = JobPosition(
+        company_id=company.id,
+        title=title,
+        description=data.get("description", ""),
+        location=data.get("location", ""),
+        salary=data.get("salary", ""),
+        skills_required=data.get("skills_required", ""),
+        experience_required=data.get("experience_required", ""),
+        benefits=data.get("benefits", ""),
+        last_date=data.get("last_date", ""),
+        status="Active",
+        is_approved=False
+    )
+    db.session.add(new_job)
+    db.session.commit()
+
+    return jsonify({"message": "Job posted successfully. Waiting for admin approval."}), 201
+
+
+@app.route("/api/company/jobs/<int:job_id>", methods=["PUT"])
+@auth_required("token")
+@company_required
+def company_update_job(job_id):
+    company = Company.query.filter_by(user_id=current_user.id).first()
+    job = JobPosition.query.get(job_id)
+
+    if not job or job.company_id != company.id:
+        return jsonify({"message": "Job not found"}), 404
+
+    data = request.get_json()
+    if data.get("title"):
+        job.title = data.get("title")
+    if data.get("description") is not None:
+        job.description = data.get("description")
+    if data.get("location") is not None:
+        job.location = data.get("location")
+    if data.get("salary") is not None:
+        job.salary = data.get("salary")
+    if data.get("skills_required") is not None:
+        job.skills_required = data.get("skills_required")
+    if data.get("experience_required") is not None:
+        job.experience_required = data.get("experience_required")
+    if data.get("benefits") is not None:
+        job.benefits = data.get("benefits")
+    if data.get("last_date") is not None:
+        job.last_date = data.get("last_date")
+    if data.get("status") is not None:
+        job.status = data.get("status")
+
+    db.session.commit()
+    return jsonify({"message": "Job updated successfully"}), 200
+
+
+@app.route("/api/company/jobs/<int:job_id>/close", methods=["PUT"])
+@auth_required("token")
+@company_required
+def company_close_job(job_id):
+    company = Company.query.filter_by(user_id=current_user.id).first()
+    job = JobPosition.query.get(job_id)
+
+    if not job or job.company_id != company.id:
+        return jsonify({"message": "Job not found"}), 404
+
+    if job.status == "Active":
+        job.status = "Closed"
+    else:
+        job.status = "Active"
+
+    db.session.commit()
+    return jsonify({"message": "Job status updated to " + job.status}), 200
+
+
+@app.route("/api/company/jobs/<int:job_id>/applicants", methods=["GET"])
+@auth_required("token")
+@company_required
+def company_get_applicants(job_id):
+    company = Company.query.filter_by(user_id=current_user.id).first()
+    job = JobPosition.query.get(job_id)
+
+    if not job or job.company_id != company.id:
+        return jsonify({"message": "Job not found"}), 404
+
+    applications = Application.query.filter_by(job_id=job_id).all()
+    applicant_list = []
+    for a in applications:
+        student = Student.query.get(a.student_id)
+        user = User.query.get(student.user_id) if student else None
+        applicant_list.append({
+            "application_id": a.id,
+            "student_id": a.student_id,
+            "student_name": student.full_name if student else "",
+            "student_email": user.email if user else "",
+            "education": student.education if student else "",
+            "skills": student.skills if student else "",
+            "experience": student.experience if student else "",
+            "phone": student.phone if student else "",
+            "status": a.status,
+            "feedback": a.feedback,
+            "interview_date": a.interview_date,
+            "interview_time": a.interview_time,
+            "interview_location": a.interview_location,
+            "applied_date": str(a.applied_date) if a.applied_date else ""
+        })
+
+    return jsonify(applicant_list), 200
+
+
+@app.route("/api/company/applications/<int:app_id>/status", methods=["PUT"])
+@auth_required("token")
+@company_required
+def company_update_application_status(app_id):
+    company = Company.query.filter_by(user_id=current_user.id).first()
+    application = Application.query.get(app_id)
+
+    if not application:
+        return jsonify({"message": "Application not found"}), 404
+
+    job = JobPosition.query.get(application.job_id)
+    if not job or job.company_id != company.id:
+        return jsonify({"message": "Not authorized"}), 403
+
+    data = request.get_json()
+    new_status = data.get("status")
+    feedback = data.get("feedback")
+
+    allowed_statuses = ["Applied", "Shortlisted", "Interview", "Selected", "Rejected"]
+    if new_status not in allowed_statuses:
+        return jsonify({"message": "Invalid status"}), 400
+
+    application.status = new_status
+    if feedback is not None:
+        application.feedback = feedback
+
+    db.session.commit()
+
+    if new_status == "Selected":
+        existing = Placement.query.filter_by(
+            student_id=application.student_id,
+            company_id=company.id,
+            job_id=application.job_id
+        ).first()
+        if not existing:
+            new_placement = Placement(
+                student_id=application.student_id,
+                company_id=company.id,
+                job_id=application.job_id,
+                position=job.title,
+                salary=job.salary
+            )
+            db.session.add(new_placement)
+            db.session.commit()
+
+    return jsonify({"message": "Application status updated to " + new_status}), 200
+
+
+@app.route("/api/company/applications/<int:app_id>/interview", methods=["PUT"])
+@auth_required("token")
+@company_required
+def company_schedule_interview(app_id):
+    company = Company.query.filter_by(user_id=current_user.id).first()
+    application = Application.query.get(app_id)
+
+    if not application:
+        return jsonify({"message": "Application not found"}), 404
+
+    job = JobPosition.query.get(application.job_id)
+    if not job or job.company_id != company.id:
+        return jsonify({"message": "Not authorized"}), 403
+
+    data = request.get_json()
+    application.interview_date = data.get("interview_date", "")
+    application.interview_time = data.get("interview_time", "")
+    application.interview_location = data.get("interview_location", "")
+    application.status = "Interview"
+
+    db.session.commit()
+    return jsonify({"message": "Interview scheduled successfully"}), 200
+
+
 if __name__ == "__main__":
     app.run(debug=True, port=5000)
