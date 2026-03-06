@@ -1,0 +1,52 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual Environment
+.venv/
+venv/
+env/
+
+# Flask
+instance/
+*.db
+*.sqlite3
+
+# Vue.js
+frontend/node_modules/
+frontend/dist/
+
+# Redis
+dump.rdb
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment variables
+.env
+
+# Celery
+celerybeat-schedule
+celerybeat.pid
+
+# Logs
+*.log
+
+# Uploads
+uploads/
+
+# PDF files (project docs)
+*.pdf
